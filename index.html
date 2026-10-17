@@ -97,6 +97,24 @@
     }
     .film-icon-btn:hover { border-color: rgba(139,92,246,0.5); }
     .film-icon-btn--on { color: #f0b429; border-color: #f0b429; background: rgba(240,180,41,0.12); box-shadow: 0 0 12px rgba(240,180,41,0.2); }
+    /* Suchleiste + Ergebnis-Dropdown (Plan-Punkt 6b; Styles hier, damit sie ohne Tailwind-JIT funktionieren) */
+    .search-dropdown {
+      position: absolute; top: calc(100% + 0.35rem); left: 0; right: 0; z-index: 40;
+      background: rgba(16,19,26,0.97); border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 0.75rem; box-shadow: 0 14px 34px rgba(0,0,0,0.55);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      max-height: 16rem; overflow-y: auto;
+    }
+    .search-status { margin: 0; padding: 0.6rem 0.75rem; font-size: 0.78rem; color: #94a3b8; }
+    .search-item {
+      display: flex; align-items: center; gap: 0.6rem; width: 100%; padding: 0.45rem 0.7rem;
+      border: 0; background: transparent; cursor: pointer; text-align: left;
+    }
+    .search-item:hover { background: rgba(139,92,246,0.16); }
+    .search-item img { width: 2rem; height: 3rem; object-fit: cover; border-radius: 0.25rem; flex-shrink: 0; }
+    .search-item-text { flex: 1; min-width: 0; }
+    .search-item-title { margin: 0; font-size: 0.8rem; font-weight: 500; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .search-item-meta { margin: 0.1rem 0 0; font-size: 0.7rem; color: #94a3b8; }
     /* Klappentext-Modal (Plan-Punkt 5b) */
     #film-modal { position: fixed; inset: 0; z-index: 50; align-items: center; justify-content: center; padding: 1rem; }
     #film-modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }
@@ -163,12 +181,29 @@
         <h2 class="text-xl font-semibold text-slate-100">Deine Filme</h2>
         <p class="mt-3 text-sm text-slate-400">
           Bewerte Filme, die du gesehen hast (1–5&nbsp;Sterne), merke dir Favoriten für später (🔖) und
-          klicke auf eine Karte für den Klappentext. Alles wird automatisch gespeichert.
+          klicke auf eine Karte für den Klappentext. Fehlende Filme ergänzt die iTunes-Suche.
+          Alles wird automatisch gespeichert.
         </p>
 
         <div class="mt-6 flex items-center justify-between">
           <span id="ratings-progress" class="text-sm text-slate-300">Gesehen: 0 von 35</span>
           <span class="text-xs text-slate-500">Tipp: Erneuter Klick auf die aktuelle Bewertung löscht sie</span>
+        </div>
+
+        <!-- Livesuche (Plan-Punkt 6b): Treffer landen per Klick als Custom-Film im Grid -->
+        <div class="relative mt-6">
+          <label for="film-search" class="sr-only">Weitere Filme suchen</label>
+          <input
+            id="film-search"
+            type="search"
+            autocomplete="off"
+            placeholder="Weitere Filme aus iTunes suchen …"
+            class="w-full rounded-lg border border-white/10 bg-anthracite-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-neon-violet focus:ring-2 focus:ring-neon-violet/30"
+          />
+          <div id="search-dropdown" class="search-dropdown hidden">
+            <p id="search-status" class="search-status" hidden></p>
+            <div id="search-items" class="py-1"></div>
+          </div>
         </div>
 
         <div id="film-grid" class="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3"></div>

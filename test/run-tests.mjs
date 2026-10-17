@@ -39,7 +39,7 @@ import {
   saveCustomFilms,
   loadCustomFilms,
 } from "../src/core/search.js";
-import { fallbackPoster, posterHue } from "../src/ui/step2.js";
+import { fallbackPoster, posterHue, initStep2 } from "../src/ui/step2.js";
 
 let passed = 0;
 let failed = 0;
@@ -708,6 +708,174 @@ test("normalizeCustomFilms: defensiva – kaputte Einträge/Doppel-IDs raus, MAX
   assert.equal(normalizeCustomFilms(many).length, MAX_CUSTOM_FILMS);
   assert.deepEqual(normalizeCustomFilms("kaputt"), []);
   assert.deepEqual(normalizeCustomFilms(null), []);
+});
+
+// --- Punkt 6b – Livesuche in Schritt 2 (DOM-Stub) ----------------------------
+// initStep2() ist pro Prozess nur einmal ausführbar (initialisierte-Flag),
+// daher ein umfassender Smoke-Test mit Phasen statt mehreren Inits.
+
+function makeClassList() {
+  const set = new Set();
+  return {
+    add: (...ns) => ns.forEach((n) => set.add(n)),
+    remove: (...ns) => ns.forEach((n) => set.delete(n)),
+    contains: (n) => set.has(n),
+    toggle: (n, force) => {
+      const want = force === undefined ? !set.has(n) : Boolean(force);
+      if (want) set.add(n);
+      else set.delete(n);
+      return want;
+    },
+  };
+}
+
+class FakeElement {
+  constructor(tag = "div") {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.classList = makeClassList();
+    this.dataset = {};
+    this.attributes = {};
+    this.listeners = {};
+    this.value = "";
+    this.hidden = false;
+    // Wie im echten DOM: textContent setzen ersetzt alle Kind-Knoten.
+    let text = "";
+    Object.defineProperty(this, "textContent", {
+      get: () => text,
+      set: (v) => {
+        text = String(v);
+        this.children = [];
+      },
+      configurable: true,
+    });
+    this.src = "";
+    this.alt = "";
+    this.type = "";
+    this.disabled = false;
+  }
+  appendChild(child) { this.children.push(child); return child; }
+  append(...children) { this.children.push(...children); }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  removeEventListener(type, fn) {
+    this.listeners[type] = (this.listeners[type] ?? []).filter((f) => f !== fn);
+  }
+  dispatch(type, extra = {}) {
+    for (const fn of [...(this.listeners[type] ?? [])]) {
+      fn({ key: "", preventDefault() {}, stopPropagation() {}, ...extra });
+    }
+  }
+  setAttribute(k, v) { this.attributes[k] = String(v); }
+  getAttribute(k) { return this.attributes[k] ?? null; }
+  focus() {}
+  querySelectorAll() { return []; }
+}
+
+const STEP2_IDS = [
+  "film-grid", "ratings-progress", "film-search",
+  "search-dropdown", "search-status", "search-items",
+  "film-modal", "film-modal-title", "film-modal-meta",
+  "film-modal-poster", "film-modal-description",
+  "film-modal-close", "film-modal-backdrop",
+];
+
+function makeFakeDocument() {
+  const map = new Map();
+  for (const id of STEP2_IDS) map.set(id, new FakeElement("div"));
+  return {
+    activeElement: null,
+    getElementById: (id) => map.get(id) ?? null,
+    createElement: (tag) => new FakeElement(tag),
+  };
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test("step2 (DOM-Stub): Suche → Treffer-Klick → Custom-Film im Grid + Persistenz + Fortschritt; Duplikat; Fallback; Mindestdauer", async () => {
+  const doc = makeFakeDocument();
+  const previousDocument = globalThis.document;
+  globalThis.document = doc;
+  try {
+    const storage = new FakeStorage();
+    const HIT = {
+      id: "it:123",
+      title: "Blade Runner",
+      year: 1982,
+      genre: "Sci-Fi",
+      term: "Blade Runner 1982",
+      poster: "https://cdn.example/blade-1000.jpg",
+      description: "Sechs Jahre nach der Zukunft.",
+    };
+    const searchCalls = [];
+    initStep2({
+      films: [catalog.find((f) => f.id === "inception-2010")],
+      ituns: {
+        lookup: async (term) => ({
+          term, title: null, poster: null, description: null,
+          source: "fallback", reason: "test", fromCache: false,
+        }),
+      },
+      search: async (q) => {
+        searchCalls.push(q);
+        if (q.startsWith("zzz")) {
+          return { hits: [], source: "fallback", reason: "offline (kein fetch verfügbar)", fromCache: false };
+        }
+        return { hits: [HIT], source: "itunes", fromCache: false };
+      },
+      storage,
+    });
+
+    const grid = doc.getElementById("film-grid");
+    const input = doc.getElementById("film-search");
+    const dropdown = doc.getElementById("search-dropdown");
+    const status = doc.getElementById("search-status");
+    const items = doc.getElementById("search-items");
+    const progress = doc.getElementById("ratings-progress");
+
+    // Phase 0: init baut die Katalog-Karte; Fortschritt korrekt
+    assert.equal(grid.children.length, 1, "Katalog-Karte fehlt");
+    assert.ok(progress.textContent.includes("von 1"), "Fortschritt nach init falsch: " + progress.textContent);
+
+    // Phase 1: tippen → Debounce → Treffer → Klick → Karte + Persistenz
+    input.value = "blade";
+    input.dispatch("input");
+    await sleep(600); // Debounce 400 ms + asynchrone Suche
+    assert.deepEqual(searchCalls, ["blade"], "Suche nicht mit Tipp ausgelöst");
+    assert.equal(items.children.length, 1, "Dropdown-Treffer fehlt");
+    assert.equal(grid.children.length, 1, "Treffer-Karte vor dem Klick vorhanden?");
+    items.children[0].dispatch("click");
+    assert.equal(grid.children.length, 2, "Custom-Film-Karte fehlt");
+    assert.equal(grid.children[1].dataset.filmId, "it:123");
+    assert.ok(progress.textContent.includes("von 2"), "Fortschritt nach Add nicht aktualisiert: " + progress.textContent);
+    const persisted = JSON.parse(storage.getItem(CUSTOM_FILMS_STORAGE_KEY));
+    assert.deepEqual(persisted.map((f) => f.id), ["it:123"], "Custom-Film nicht persistiert");
+
+    // Phase 2: gleicher Treffer erneut → Duplikat-Hinweis, keine zweite Karte
+    input.value = "blade";
+    input.dispatch("input");
+    await sleep(600);
+    items.children[0].dispatch("click");
+    assert.match(status.textContent, /bereits/, "Duplikat-Hinweis fehlt");
+    assert.equal(grid.children.length, 2, "Duplikat wurde doppelt aufgenommen");
+
+    // Phase 3: Fallback (offline) → Status „Keine Treffer", leeres Item-Liste
+    input.value = "zzz";
+    input.dispatch("input");
+    await sleep(600);
+    assert.match(status.textContent, /Keine Treffer/, "Fallback-Status fehlt");
+    assert.equal(items.children.length, 0);
+
+    // Phase 4: zu kurzer Begriff → Dropdown schließt, Status leert
+    input.value = "x";
+    input.dispatch("input");
+    await sleep(600);
+    assert.ok(dropdown.classList.contains("hidden"), "Dropdown bleibt bei <2 Zeichen offen");
+    assert.equal(status.textContent, "");
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    await sleep(0); // ausstehende Lookups/Timer des Stubs abklingen lassen
+  }
 });
 
 await Promise.allSettled(pending); // asynchrone Tests (Punkt 3) bis zum Abschluss laufen lassen

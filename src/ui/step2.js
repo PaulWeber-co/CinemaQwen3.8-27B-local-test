@@ -1,11 +1,13 @@
-// CineMatch – Schritt-2-UI (Plan-Punkt 5b)
+// CineMatch – Schritt-2-UI (Plan-Punkt 5b + 6b)
 // Film-Grid mit Postern (iTunes hiRes, offline → SVG-Platzhalter), 1–5 Sterne,
-// Watchlist, Reset und Klappentext-Modal; Auto-Save über core/ratings.js.
+// Watchlist, Reset, Klappentext-Modal und iTunes-Livesuche (Punkt 6b):
+// Treffer erscheinen in einem Dropdown und landen per Klick als Custom-Film
+// im Grid; Auto-Save über core/ratings.js, Custom-Filme über core/search.js.
 //
-// Die Logik (Zustand, Save/Load) lebt in src/core/ratings.js (DOM-frei, getestet);
-// diese Datei bedient nur das DOM. initStep2() ist idempotent – app.js ruft sie
-// beim ersten Betritt von Schritt 2 auf (lazy, damit beim Seitenaufruf nicht
-// sofort 35 iTunes-Anfragen fliegen).
+// Die Logik (Zustand, Save/Load, Dedupe) lebt in den core-Modulen (DOM-frei,
+// getestet); diese Datei bedient nur das DOM. initStep2() ist idempotent –
+// app.js ruft sie beim ersten Betritt von Schritt 2 auf (lazy, damit beim
+// Seitenaufruf nicht sofort 35 iTunes-Anfragen fliegen).
 
 import { catalog } from "../core/catalog.js";
 import { ituns as defaultItuns } from "../core/itunes.js";
@@ -18,9 +20,16 @@ import {
   resetFilm,
   watchedCount,
 } from "../core/ratings.js";
+import { loadCustomFilms, saveCustomFilms, mergeSearchHits } from "../core/search.js";
 
 /** Höchste gleichzeitige iTunes-Abfragen (Browser limitiert sowoit auf ~6/Host). */
 const LOOKUP_CONCURRENCY = 5;
+
+/** Debounce für die Livesuche: so viel Luft, dass man tippen kann. */
+const SEARCH_DEBOUNCE_MS = 400;
+
+/** Mindestlänge des Suchbegriffs, ab der gesucht wird. */
+const SEARCH_MIN_CHARS = 2;
 
 const ARTICLES = new Set(["der", "die", "das"]);
 
@@ -68,9 +77,12 @@ export function fallbackPoster(film) {
 let initialized = false;
 
 /**
- * Baut das Film-Grid auf (idempotent).
- * @param {{ films?: object[], ituns?: object, storage?: object|null }} [options]
- *   Alle drei sind für Tests/Offline injizierbar; Standards: Katalog, ituns-Singleton, Browser-Storage.
+ * Baut das Film-Grid + Livesuche auf (idempotent).
+ * @param {{ films?: object[], ituns?: object,
+ *           search?: (q: string, o?: object) => Promise,
+ *           storage?: object|null }} [options]
+ *   Alles ist für Tests/Offline injizierbar; Standards: Katalog, ituns-Singleton,
+ *   dessen search(), Browser-Storage.
  */
 export function initStep2(options = {}) {
   if (initialized) return; // zweiter Aufruf (Navigation) bleibt no-op
@@ -78,9 +90,15 @@ export function initStep2(options = {}) {
   if (!grid) return; // Schritt-2-Sektion fehlt → App läuft weiter
   initialized = true;
 
-  const films = options.films ?? catalog;
+  const baseFilms = options.films ?? catalog;
   const ituns = options.ituns ?? defaultItuns;
+  const search = options.search ?? ((q, o) => ituns.search(q, o));
   const storage = options.storage ?? globalThis.localStorage ?? null;
+
+  // Custom-Filme (Punkt 6) kommen aus der Persistenz; die Anzeige-Liste ist
+  // Katalog + Custom und wächst, wenn die Suche neue Treffer beisteuert.
+  let customFilms = loadCustomFilms(storage);
+  let films = [...baseFilms, ...customFilms];
 
   const progressEl = document.getElementById("ratings-progress");
 
@@ -252,15 +270,31 @@ export function initStep2(options = {}) {
     return { el, img, starBtns, watchBtn, resetBtn };
   }
 
-  for (const film of films) {
+  function mountCard(film) {
     const card = buildCard(film);
     cards.set(film.id, card);
     grid.appendChild(card.el);
+    // Custom-Filme bringen ihr hiRes-Poster aus dem Suchtreffer mit →
+    // direkt einbauen (Katalog-Karten bekommt ihr Src später vom Lookup).
+    if (film.poster) card.img.src = film.poster;
   }
 
-  // Posters nachladen (begrenzte Parallelität; ituns.lookup wirft nie,
-  // der try/catch ist doppelter Boden für injizierte Test-Clients).
-  const queue = [...films];
+  for (const film of films) mountCard(film);
+
+  // Modal-Info + Poster-Lookup: Custom-Filme haben schon Poster/Text aus dem
+  // Suchtreffer (kein Extra-Request nötig), der Rest kommt in die Lookup-Queue.
+  const queue = [];
+  for (const film of films) {
+    if (film.poster || film.description) {
+      info[film.id] = {
+        poster: film.poster ?? null,
+        description: film.description ?? null,
+        source: "custom",
+      };
+    } else {
+      queue.push(film);
+    }
+  }
   async function worker() {
     while (queue.length > 0) {
       const film = queue.shift();
@@ -281,6 +315,135 @@ export function initStep2(options = {}) {
     }
   }
   for (let i = 0; i < Math.min(LOOKUP_CONCURRENCY, films.length); i++) void worker();
+
+  // --- Livesuche (Plan-Punkt 6b) ---------------------------------------------
+
+  const searchInput = document.getElementById("film-search");
+  const dropdown = document.getElementById("search-dropdown");
+  const statusEl = document.getElementById("search-status");
+  const itemsEl = document.getElementById("search-items");
+
+  let searchToken = 0; // veraltete Suchantworten erkennen (Input schon weitergetippt)
+  let debounceTimer = 0;
+  let autoCloseTimer = 0; // schließt das Dropdown, nachdem ein Treffer hinzugefügt wurde
+
+  function setSearchStatus(text) {
+    if (!statusEl) return;
+    statusEl.textContent = text;
+    statusEl.hidden = !text;
+  }
+
+  function closeDropdown() {
+    dropdown?.classList.add("hidden");
+  }
+
+  function renderHits(hits) {
+    if (!itemsEl) return;
+    itemsEl.textContent = "";
+    for (const hit of hits) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "search-item";
+      const img = document.createElement("img");
+      img.alt = "";
+      img.loading = "lazy";
+      img.src = hit.poster || fallbackPoster({ id: hit.id, title: hit.title, year: hit.year });
+      const text = document.createElement("div");
+      text.className = "search-item-text";
+      const title = document.createElement("p");
+      title.className = "search-item-title";
+      title.textContent = hit.title;
+      const meta = document.createElement("p");
+      meta.className = "search-item-meta";
+      meta.textContent = [hit.year, hit.genre].filter(Boolean).join(" · ") || "iTunes";
+      text.append(title, meta);
+      btn.append(img, text);
+      // Fokus im Input behalten, damit der Klick (nach dem Blur) sicher ankommt.
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", () => addHit(hit));
+      itemsEl.appendChild(btn);
+    }
+  }
+
+  function addHit(hit) {
+    const { films: merged, added } = mergeSearchHits(films, [hit]); // Dedupe im Kern
+    if (added.length === 0) {
+      // Dropdown bleibt geöffnet: Status ist darin verankert, Nutzer tippt weiter.
+      setSearchStatus("Dieser Film steht bereits in der Liste.");
+      return;
+    }
+    films = merged;
+    customFilms = [...customFilms, ...added];
+    saveCustomFilms(storage, customFilms); // Persistenz (Kern-Modul, wirft nie)
+    for (const film of added) {
+      if (film.poster || film.description) {
+        info[film.id] = {
+          poster: film.poster ?? null,
+          description: film.description ?? null,
+          source: "custom",
+        };
+      }
+      mountCard(film);
+      renderCard(film); // ggf. gespeicherte Bewertung aus einer früheren Session
+    }
+    updateProgress();
+    setSearchStatus(`+${added.length} Film${added.length > 1 ? "e" : ""} hinzugefügt.`);
+    if (searchInput) {
+      searchInput.value = "";
+      searchInput.focus();
+    }
+    // Status kurz zeigen, dann ausblenden (er wohnt im Dropdown).
+    clearTimeout(autoCloseTimer);
+    autoCloseTimer = setTimeout(closeDropdown, 1600);
+  }
+
+  async function runSearch() {
+    const term = String(searchInput?.value ?? "").trim();
+    if (term.length < SEARCH_MIN_CHARS) {
+      closeDropdown();
+      setSearchStatus("");
+      return;
+    }
+    const token = ++searchToken;
+    clearTimeout(autoCloseTimer);
+    dropdown?.classList.remove("hidden");
+    setSearchStatus("Suche …");
+    if (itemsEl) itemsEl.textContent = "";
+    let result;
+    try {
+      result = await search(term, { limit: 8 });
+    } catch {
+      // ituns.search wirft nie; doppelter Boden für injizierte Test-Clients.
+      result = { hits: [], source: "fallback", reason: "Unerwarteter Fehler" };
+    }
+    if (token !== searchToken) return; // Input war schon weiter → Antwort veraltet
+    if (result.hits.length > 0) {
+      renderHits(result.hits);
+      setSearchStatus(`${result.hits.length} Treffer – Klick fügt hinzu.`);
+    } else {
+      renderHits([]);
+      setSearchStatus(
+        result.source === "fallback" && result.reason && result.reason !== "kein Treffer"
+          ? `Keine Treffer – ${result.reason}.`
+          : "Keine Treffer gefunden."
+      );
+    }
+  }
+
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(runSearch, SEARCH_DEBOUNCE_MS);
+    });
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        ++searchToken; // ausstehende Antwort verworfen
+        closeDropdown();
+        setSearchStatus("");
+      }
+    });
+    searchInput.addEventListener("blur", closeDropdown);
+  }
 
   for (const film of films) renderCard(film); // gespeicherte Zustände anzeigen
   updateProgress();
