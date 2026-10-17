@@ -18,6 +18,18 @@ import {
   saveProfile,
   loadProfile,
 } from "../src/core/profile.js";
+import {
+  RATINGS_STORAGE_KEY,
+  MAX_STARS,
+  emptyRatings,
+  normalizeRatings,
+  setStars,
+  toggleWatchlist,
+  resetFilm,
+  watchedCount,
+  saveRatings,
+  loadRatings,
+} from "../src/core/ratings.js";
 
 let passed = 0;
 let failed = 0;
@@ -320,6 +332,100 @@ test("Profil: kaputtes JSON → leeres Profil, wirft nie", () => {
 test("Profil: Storage explizit null (Offline-Modus) → kein Crash, kein Write", () => {
   assert.deepEqual(loadProfile(null), emptyProfile());
   assert.equal(saveProfile(null, { name: "x" }), false);
+});
+
+console.log("\nPunkt 5a – Bewertungen (Schritt 2)\n");
+
+test("Bewertungen-API: MAX_STARS=5, leerer Zustand als Fallback", () => {
+  assert.equal(MAX_STARS, 5);
+  assert.deepEqual(emptyRatings(), { films: {} });
+});
+
+test("Bewertungen: setStars 1–5 erzeugt Eintrag, 0 entfernt ihn (unberührt)", () => {
+  let r = setStars(emptyRatings(), "inception-2010", 4);
+  assert.deepEqual(r.films["inception-2010"], { stars: 4, watchlist: false });
+  assert.equal(watchedCount(r), 1);
+  r = setStars(r, "inception-2010", 0);
+  assert.equal("inception-2010" in r.films, false, "stars=0 muss den Eintrag entfernen");
+  assert.equal(watchedCount(r), 0);
+});
+
+test("Bewertungen: unzulässige Sterne-Werte werden geklemmt (7→5, negativ/Nicht-Zahl→0)", () => {
+  assert.equal(setStars(emptyRatings(), "f", 7).films["f"].stars, 5, "7 Sterne werden auf 5 geklemmt");
+  assert.equal(setStars(emptyRatings(), "f", -2).films["f"], undefined, "negativ → 0 → Eintrag entfernt");
+  assert.equal(setStars(emptyRatings(), "f", "abc").films["f"], undefined, "nicht-numerisch unmöglich");
+  const rounded = setStars(emptyRatings(), "f", 3.6);
+  assert.equal(rounded.films["f"].stars, 4, "3.6 → auf 4 gerundet");
+});
+
+test("Bewertungen: toggleWatchlist an/aus, Watchlist-only-Eintrag (stars 0) bleibt erhalten", () => {
+  let r = toggleWatchlist(emptyRatings(), "f");
+  assert.deepEqual(r.films["f"], { stars: 0, watchlist: true });
+  r = toggleWatchlist(r, "f");
+  assert.equal("f" in r.films, false, "abschalten + keine Sterne → Eintrag weg");
+  const withStars = setStars(emptyRatings(), "f", 2);
+  const wl = toggleWatchlist(withStars, "f");
+  assert.deepEqual(wl.films["f"], { stars: 2, watchlist: true });
+});
+
+test("Bewertungen: resetFilm räumt Sterne UND Watchlist ab", () => {
+  let r = setStars(emptyRatings(), "f", 5);
+  r = toggleWatchlist(r, "f");
+  assert.deepEqual(r.films["f"], { stars: 5, watchlist: true });
+  const reset = resetFilm(r, "f");
+  assert.equal("f" in reset.films, false, "nach Reset muss der Eintrag weg sein");
+});
+
+test("Bewertungen: Mutationsschutz – Eingangsobjekt bleibt unverändert", () => {
+  const before = { films: { f: { stars: 3, watchlist: false } } };
+  const snapshot = JSON.stringify(before);
+  setStars(before, "f", 1);
+  toggleWatchlist(before, "f");
+  resetFilm(before, "f");
+  assert.equal(JSON.stringify(before), snapshot, "setStars/toggle/reset dürfen nicht mutieren");
+});
+
+test("Bewertungen: defensive normalizeRatings (kaputte/externe Daten)", () => {
+  assert.deepEqual(normalizeRatings(null), emptyRatings());
+  assert.deepEqual(normalizeRatings("quatsch"), emptyRatings());
+  const r = normalizeRatings({
+    films: {
+      "a": { stars: 9, watchlist: "ja" },        // 9 → 5, watchlist-String → false
+      "b": { stars: 2, watchlist: true },
+      "": { stars: 5, watchlist: true },          // leere ID → verworfen
+      "c": 42,                                    // kein Objekt → verworfen
+      "d": { stars: 0, watchlist: false },        // leer → verworfen
+    },
+  });
+  assert.deepEqual(r.films["a"], { stars: 5, watchlist: false });
+  assert.deepEqual(r.films["b"], { stars: 2, watchlist: true });
+  assert.equal(Object.keys(r.films).length, 2, `erwartet 2 Einträge, gab es ${Object.keys(r.films).length}`);
+});
+
+test("Bewertungen: watchedCount zählt nur Sterne >= 1, Watchlist-only nicht", () => {
+  const r = normalizeRatings({
+    films: { "a": { stars: 5, watchlist: true }, "b": { stars: 1, watchlist: false }, "c": { stars: 0, watchlist: true } },
+  });
+  assert.equal(watchedCount(r), 2);
+});
+
+test("Bewertungen: Save/Load-Roundtrip über (Fake-)-Storage", () => {
+  const s = new FakeStorage();
+  const r = setStars(emptyRatings(), "inception-2010", 4);
+  assert.equal(saveRatings(s, r), true);
+  assert.equal(s.getItem(RATINGS_STORAGE_KEY), JSON.stringify(r));
+  assert.deepEqual(loadRatings(s), r);
+});
+
+test("Bewertungen: kaputtes JSON → leeres Objekt, wirft nie", () => {
+  const s = new FakeStorage();
+  s.setItem(RATINGS_STORAGE_KEY, "{ kaputt");
+  assert.deepEqual(loadRatings(s), emptyRatings());
+});
+
+test("Bewertungen: Storage explizit null (Offline-Modus) → kein Crash, kein Write", () => {
+  assert.deepEqual(loadRatings(null), emptyRatings());
+  assert.equal(saveRatings(null, setStars(emptyRatings(), "f", 3)), false);
 });
 
 await Promise.allSettled(pending); // asynchrone Tests (Punkt 3) bis zum Abschluss laufen lassen
