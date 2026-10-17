@@ -14,6 +14,8 @@ Annahmen: Keine npm-Abhängigkeiten – Tailwind via CDN, Vanilla JS als ES-Modu
   - [x] 5a. `src/core/ratings.js` (DOM-frei, Node-testbar): Bewertungs-Zustand pro Film (stars 0–5, 0 = unberührt; watchlist), setStars/toggleWatchlist/resetFilm, save/load mit injizierbarem Storage, defensive normalize; Unit-Tests.
   - [x] 5b. `src/ui/step2.js`: Film-Grid mit Poster (itunes.js, Fallback), Titel, Jahr; 1–5-Sterne-Widget, Watchlist-Button, Reset, Klappentext-Modal; Auto-Save in localStorage; index.html Schritt-2-Sektion ersetzt.
 - [ ] 6. Live-Suchleiste: iTunes-Livesuche (Debounce, Ergebnis-Dropdown), Treffer per Klick in die Bewertungsliste aufnehmen.
+  - [x] 6a. Such-Kern (DOM-frei, getestet): `search()` am iTunes-Client (Multi-Treffer, hiRes-Poster, in-memory-Cache, nie werfend) + `src/core/search.js` (Dedupe per `mergeSearchHits()`, Persistenz der Custom-Filme) + Unit-Tests.
+  - [ ] 6b. UI: Suchleiste in Schritt 2 (Debounce, Ergebnis-Dropdown mit Poster/Jahr/Genre), Treffer per Klick als Custom-Film in Grid + Bewertungen aufnehmen, Persistenz, Fortschrittszeile.
 - [ ] 7. Schritt 3: "Meinen Code kopieren" (kompaktes JSON → Base64 → Zwischenablage) + Einfügefeld + "Match berechnen!" (Validierung, Fehlermeldung); "Demo-Freund laden"-Button mit vorgefertigtem Test-Code.
 - [ ] 8. Matching-Algorithmus: `matcher.js` rechnet Gesamt-Score (70% nur gemeinsam gesehen & bewertet, Formel `100 − |ΔSterne|/4·100`; 30% Genre-Overlap) plus die drei Listen (Seelenverwandt, Größte Unterschiede, Gemeinsamer Filmabend); vollständige Unit-Tests inkl. Edge Cases (keine gemeinsamen Filme, keine Genres).
 - [ ] 9. Dashboard-UI: animierter Prozent-Gauge, Karten mit Postern für alle vier Sektionen, sauberer Empty-State bei ungenügenden Daten.

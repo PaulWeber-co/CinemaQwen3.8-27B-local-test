@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { encodeCode, decodeCode } from "../src/core/codec.js";
 import { computeMatch } from "../src/core/matcher.js";
 import { catalog, catalogGenres, findFilmById, KNOWN_GENRES } from "../src/core/catalog.js";
-import { createItunesClient, ituns } from "../src/core/itunes.js";
+import { createItunesClient, ituns, mapGenre } from "../src/core/itunes.js";
 import {
   PROFILE_STORAGE_KEY,
   MAX_GENRES,
@@ -30,6 +30,15 @@ import {
   saveRatings,
   loadRatings,
 } from "../src/core/ratings.js";
+import {
+  CUSTOM_FILMS_STORAGE_KEY,
+  MAX_CUSTOM_FILMS,
+  normalizeCustomFilms,
+  dedupeKeys,
+  mergeSearchHits,
+  saveCustomFilms,
+  loadCustomFilms,
+} from "../src/core/search.js";
 import { fallbackPoster, posterHue } from "../src/ui/step2.js";
 
 let passed = 0;
@@ -458,6 +467,247 @@ test("step2: fallbackPoster ignoriert Artikel in Initialen und verträgt kaputte
   assert.match(decodeURIComponent(dark.slice(dark.indexOf(",") + 1)), /DR</, "Initialen sollen 'DR' sein");
   const empty = fallbackPoster({ id: "y-2", title: "", year: 1999 });
   assert.match(decodeURIComponent(empty.slice(empty.indexOf(",") + 1)), /\?\?</, "leerer Titel → '??'");
+});
+
+console.log("\nPunkt 6a – iTunes-Livesuche (Kern)\n");
+
+// --- Test-Doubles ---------------------------------------------------------
+
+const RAW_HIT_A = {
+  id: 887305516,
+  trackName: "Inception",
+  releaseDate: "2010-07-15T19:50:11Z",
+  genres: ["Sci-Fi & Fantasy", "Drama"],
+  artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/inc/100x100bb.jpg",
+  longDescription: "Träume in Träumen.",
+};
+
+const RAW_HIT_B = {
+  id: 999,
+  trackName: "Ein Unbekannter",
+  releaseDate: "1995-03-01T00:00:00Z",
+};
+
+function makeSearchResponse(hits) {
+  return okResponse({ resultCount: hits.length, results: hits });
+}
+
+// --- Tests -----------------------------------------------------------------
+
+test("mapGenre: iTunes-Genres → CineMatch-Genres, unbekanntes/null → null", () => {
+  assert.equal(mapGenre("Comedy"), "Komödie");
+  assert.equal(mapGenre("crime"), "Krimi");
+  assert.equal(mapGenre("Sci-Fi & Fantasy"), "Sci-Fi", "Annahme: Sci-Fi & Fantasy → Sci-Fi");
+  assert.equal(mapGenre("Documentary"), "Dokumentarfilm");
+  assert.equal(mapGenre("Animation"), "Animation");
+  assert.equal(mapGenre("Music"), null);
+  assert.equal(mapGenre(null), null);
+});
+
+test("search: Erfolg → normalisierte Treffer (it:<id>, Jahr, Genre, hiRes-Poster, Term)", async () => {
+  const client = createItunesClient({
+    fetch: () => Promise.resolve(makeSearchResponse([RAW_HIT_A, RAW_HIT_B])),
+  });
+  const r = await client.search("inception");
+  assert.equal(r.source, "itunes");
+  assert.equal(r.fromCache, false);
+  assert.equal(r.hits.length, 2);
+  assert.equal(r.hits[0].id, "it:887305516");
+  assert.equal(r.hits[0].title, "Inception");
+  assert.equal(r.hits[0].year, 2010, "Jahr aus releaseDate");
+  assert.equal(r.hits[0].genre, "Sci-Fi");
+  assert.match(r.hits[0].poster, /1000x1000bb\.jpg$/, "Poster muss hiRes sein");
+  assert.equal(r.hits[0].term, "Inception 2010");
+  assert.equal(r.hits[1].year, 1995);
+  assert.equal(r.hits[1].genre, null, "ohne genres-Feld → null");
+  assert.equal(r.hits[1].description, null);
+});
+
+test("search: limit wird auf 1..25 geklemmt und in die URL übernommen", async () => {
+  let url;
+  const client = createItunesClient({
+    fetch: (u) => { url = u; return Promise.resolve(makeSearchResponse([])); },
+  });
+  await client.search("blade runner", { limit: 999 });
+  assert.match(url, /limit=25/, "Obergrenze 25 fehlt in URL");
+  assert.match(url, /term=blade%20runner/, "normalisierter Term fehlt in URL");
+  await client.search("blade runner", { limit: -3 });
+  assert.match(url, /limit=1/, "Untergrenze 1 fehlt in URL");
+  await client.search("blade runner"); // Standard
+  assert.match(url, /limit=8/, "Standard-Limit 8 fehlt in URL");
+});
+
+test("search: in-memory-Cache – gleiche Anfrage ohne zweiten API-Call, fromCache=true", async () => {
+  const { fetchImpl, calls } = makeFakeFetch(() => Promise.resolve(makeSearchResponse([RAW_HIT_A])));
+  const client = createItunesClient({ fetch: fetchImpl });
+  const first = await client.search("Inception");
+  assert.equal(first.fromCache, false);
+  const second = await client.search("  inception  "); // normalisiert → identisch
+  assert.equal(second.fromCache, true);
+  assert.equal(calls(), 1, "erwartet 1 API-Call für beide Suchen");
+  assert.deepEqual(second.hits, first.hits);
+});
+
+test("search: Netzwerkfehler → Fallback mit leeren hits, wirft nie", async () => {
+  const client = createItunesClient({
+    fetch: () => Promise.reject(new TypeError("Failed to fetch")),
+  });
+  const r = await client.search("anything");
+  assert.equal(r.source, "fallback");
+  assert.deepEqual(r.hits, []);
+  assert.match(r.reason, /Netzwerkfehler/);
+});
+
+test("search: HTTP-Fehler, leer, ohne fetch, leerer Begriff → Fallback mit Grund", async () => {
+  const http = createItunesClient({
+    fetch: () => Promise.resolve({ ok: false, status: 500, json: async () => ({}) }),
+  });
+  assert.match((await http.search("x")).reason, /500/);
+  const empty = createItunesClient({
+    fetch: () => Promise.resolve(okResponse({ resultCount: 0, results: [] })),
+  });
+  assert.match((await empty.search("x")).reason, /kein Treffer/i);
+  assert.match((await createItunesClient({ fetch: null }).search("x")).reason, /offline/i);
+  assert.match((await createItunesClient().search("   ")).reason, /leer/i);
+});
+
+test("search: Treffer ohne Titel entfallen; fehlende iTunes-ID → stabile Slug-Id", async () => {
+  const client = createItunesClient({
+    fetch: () =>
+      Promise.resolve(
+        okResponse({
+          resultCount: 3,
+          results: [
+            { trackName: "" }, // ohne Titel → verworfen
+            { trackName: "   " }, // nur Leerzeichen → verworfen
+            { trackName: "Some Unknown Film", releaseDate: "2004-01-01T00:00:00Z" }, // ohne id
+          ],
+        })
+      ),
+  });
+  const r = await client.search("some");
+  assert.equal(r.hits.length, 1, "nur der Titel-Treffer bleibt");
+  assert.equal(r.hits[0].id, "it:slug-some-unknown-film-2004");
+  assert.equal(r.hits[0].poster, null, "ohne artwork-URL → null");
+});
+
+test("search: Ergebnis NICHT in localStorage (unbeschränkte Freitext-Begriffe); clearCache leert In-Memory", async () => {
+  const storage = new FakeStorage();
+  const { fetchImpl, calls } = makeFakeFetch(() => Promise.resolve(makeSearchResponse([RAW_HIT_A])));
+  const client = createItunesClient({ fetch: fetchImpl, storage });
+  await client.search("inception");
+  assert.equal(storage.length, 0, "Suchergebnisse dürfen nicht persistent gecacht werden");
+  client.clearCache();
+  await client.search("inception");
+  assert.equal(calls(), 2, "erwartet neuen API-Call nach clearCache");
+});
+
+test("search: Fallback wird nicht gecacht → Retry nach Re-Online liefert Treffer", async () => {
+  let online = false;
+  const client = createItunesClient({
+    fetch: () =>
+      online
+        ? Promise.resolve(makeSearchResponse([RAW_HIT_A]))
+        : Promise.reject(new TypeError("offline")),
+  });
+  const off = await client.search("inception");
+  assert.equal(off.source, "fallback");
+  online = true;
+  const on = await client.search("inception");
+  assert.equal(on.source, "itunes");
+  assert.equal(on.hits.length, 1);
+});
+
+console.log("\nPunkt 6a – Custom-Filme (src/core/search.js)\n");
+
+test("dedupeKeys: Titel-Schlüssel klein + Jahr-Suffix normalisiert; DE-Titel und EN-term als Schlüssel", () => {
+  const keys = dedupeKeys({
+    id: "the-dark-knight-2008",
+    title: "Der dunkle Ritter",
+    year: 2008,
+    term: "The Dark Knight 2008",
+  });
+  assert.ok(keys.has("der dunkle ritter 2008"), "Titel-Schlüssel mit Jahr fehlt");
+  assert.ok(keys.has("the dark knight 2008"), "Term-Schlüssel (Englisch) fehlt");
+  assert.equal(keys.size, 2);
+});
+
+test("mergeSearchHits: neue Treffer kommen hinzu, Eingabe-Array bleibt unmutiert", () => {
+  const films = [catalog.find((f) => f.id === "inception-2010")];
+  const snapshot = JSON.stringify(films);
+  const { films: merged, added } = mergeSearchHits(films, [
+    { id: "it:123", title: "Blade Runner", year: 1982, genre: "Sci-Fi", term: "Blade Runner 1982" },
+  ]);
+  assert.equal(JSON.stringify(films), snapshot, "Eingabe wurde mutiert");
+  assert.equal(added.length, 1);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[1].id, "it:123");
+});
+
+test("mergeSearchHits: Duplikat per ID wird übersprungen", () => {
+  const { films, added } = mergeSearchHits(
+    [{ id: "it:123", title: "Blade Runner", year: 1982 }],
+    [{ id: "it:123", title: "Blade Runner", year: 1982 }]
+  );
+  assert.deepEqual(added, []);
+  assert.equal(films.length, 1);
+});
+
+test("mergeSearchHits: DE<->EN – Treffer The Dark Knight (2008) = Katalog Der dunkle Ritter", () => {
+  const films = [catalog.find((f) => f.id === "the-dark-knight-2008")];
+  const { films: merged, added } = mergeSearchHits(films, [
+    { id: "it:463278206", title: "The Dark Knight", year: 2008, genre: "Action", term: "The Dark Knight 2008" },
+  ]);
+  assert.deepEqual(added, [], "muss über den Term-Schlüssel als Duplikat erkannt werden");
+  assert.equal(merged.length, 1);
+});
+
+test("mergeSearchHits: gleicher Titel+Jahr innerhalb einer Charge wird nicht doppelt aufgenommen", () => {
+  const { films, added } = mergeSearchHits([], [
+    { id: "it:1", title: "Some Film", year: 2001 },
+    { id: "it:2", title: "some film", year: 2001 }, // gleiche "Titel Jahr"-Signatur, andere ID
+  ]);
+  assert.equal(added.length, 1, "zweiter Treffer derselben Vorlage ist Duplikat");
+  assert.equal(films.length, 1);
+});
+
+test("mergeSearchHits: unvollständige Treffer (null/ohne id/ohne title) werden verworfen", () => {
+  const { films, added } = mergeSearchHits([], [
+    null,
+    { title: "Keine ID" },
+    { id: "it:7" },
+    { id: "", title: "" },
+  ]);
+  assert.deepEqual(added, []);
+  assert.deepEqual(films, []);
+});
+
+test("Custom-Filme: Save/Load-Roundtrip; kaputtes JSON → []; null-Storage → kein Crash", () => {
+  const s = new FakeStorage();
+  const films = [
+    { id: "it:1", title: "Blade Runner", year: 1982, genre: "Sci-Fi", term: "Blade Runner 1982", poster: null, description: null },
+  ];
+  assert.equal(saveCustomFilms(s, films), true);
+  assert.equal(s.getItem(CUSTOM_FILMS_STORAGE_KEY), JSON.stringify(films));
+  assert.deepEqual(loadCustomFilms(s), films);
+  s.setItem(CUSTOM_FILMS_STORAGE_KEY, "{ kaputt");
+  assert.deepEqual(loadCustomFilms(s), [], "kaputtes JSON → leere Liste");
+  assert.deepEqual(loadCustomFilms(null), []);
+  assert.equal(saveCustomFilms(null, films), false, "null-Storage → Persistenz aus");
+});
+
+test("normalizeCustomFilms: defensiva – kaputte Einträge/Doppel-IDs raus, MAX_CUSTOM_FILMS als Obergrenze", () => {
+  const raw = [
+    { id: "it:1", title: "A" },
+    { id: "it:1", title: "A" }, // doppelte ID → raus
+    { id: "it:2" }, // ohne Titel → raus
+    { id: "it:3", title: "C" },
+  ];
+  assert.deepEqual(normalizeCustomFilms(raw).map((f) => f.id), ["it:1", "it:3"]);
+  const many = Array.from({ length: MAX_CUSTOM_FILMS + 10 }, (_, i) => ({ id: `it:${i}`, title: `F${i}` }));
+  assert.equal(normalizeCustomFilms(many).length, MAX_CUSTOM_FILMS);
+  assert.deepEqual(normalizeCustomFilms("kaputt"), []);
+  assert.deepEqual(normalizeCustomFilms(null), []);
 });
 
 await Promise.allSettled(pending); // asynchrone Tests (Punkt 3) bis zum Abschluss laufen lassen
