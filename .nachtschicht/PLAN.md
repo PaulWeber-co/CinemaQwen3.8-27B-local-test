@@ -10,9 +10,9 @@ Annahmen: Keine npm-Abhängigkeiten – Tailwind via CDN, Vanilla JS als ES-Modu
 - [x] 2. Kuratierte Start-Bestenliste: `src/core/catalog.js` mit ~35 Kult-/Blockbuster-Filmen (Titel, Jahr, Genre, iTunes-`term`), unit-getestet.
 - [x] 3. iTunes-API-Client: `src/core/itunes.js` holt Cover (hiRes) + deutsche Beschreibung, in-memory + localStorage-Cache, sauberes Fallback-Verhalten bei Fehlern/Offline; Unit-Tests mit gefaktem fetch.
 - [x] 4. Schritt-1-UI: Namen-Eingabe + 10 Genre-Pills (max. 5, Toggle), automatischer localStorage-Save/Restore; Seite bleibt lauffähig.
-- [ ] 5. Schritt-2-UI: Film-Grid mit Poster, Titel, Jahr; 1–5 Sterne (setzt "gesehen"), Watchlist-Button, Reset auf "unberührt", Klappentext-Modal; alles in localStorage persistiert.
+- [x] 5. Schritt-2-UI: Film-Grid mit Poster, Titel, Jahr; 1–5 Sterne (setzt "gesehen"), Watchlist-Button, Reset auf "unberührt", Klappentext-Modal; alles in localStorage persistiert.
   - [x] 5a. `src/core/ratings.js` (DOM-frei, Node-testbar): Bewertungs-Zustand pro Film (stars 0–5, 0 = unberührt; watchlist), setStars/toggleWatchlist/resetFilm, save/load mit injizierbarem Storage, defensive normalize; Unit-Tests.
-  - [ ] 5b. `src/ui/step2.js`: Film-Grid mit Poster (itunes.js, Fallback), Titel, Jahr; 1–5-Sterne-Widget, Watchlist-Button, Reset, Klappentext-Modal; Auto-Save in localStorage; index.html Schritt-2-Sektion ersetzt.
+  - [x] 5b. `src/ui/step2.js`: Film-Grid mit Poster (itunes.js, Fallback), Titel, Jahr; 1–5-Sterne-Widget, Watchlist-Button, Reset, Klappentext-Modal; Auto-Save in localStorage; index.html Schritt-2-Sektion ersetzt.
 - [ ] 6. Live-Suchleiste: iTunes-Livesuche (Debounce, Ergebnis-Dropdown), Treffer per Klick in die Bewertungsliste aufnehmen.
 - [ ] 7. Schritt 3: "Meinen Code kopieren" (kompaktes JSON → Base64 → Zwischenablage) + Einfügefeld + "Match berechnen!" (Validierung, Fehlermeldung); "Demo-Freund laden"-Button mit vorgefertigtem Test-Code.
 - [ ] 8. Matching-Algorithmus: `matcher.js` rechnet Gesamt-Score (70% nur gemeinsam gesehen & bewertet, Formel `100 − |ΔSterne|/4·100`; 30% Genre-Overlap) plus die drei Listen (Seelenverwandt, Größte Unterschiede, Gemeinsamer Filmabend); vollständige Unit-Tests inkl. Edge Cases (keine gemeinsamen Filme, keine Genres).

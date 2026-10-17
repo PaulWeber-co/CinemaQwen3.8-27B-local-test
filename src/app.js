@@ -3,6 +3,7 @@
 // Die Schrittplatten füllen die jeweiligen Plan-Punkte mit Inhalt.
 
 import { initStep1 } from "./ui/step1.js";
+import { initStep2 } from "./ui/step2.js";
 
 const TOTAL_STEPS = 3;
 
@@ -29,6 +30,7 @@ function render() {
 function goTo(step) {
   current = Math.min(TOTAL_STEPS, Math.max(1, step));
   render();
+  if (current === 2) initStep2(); // lazy: erst beim Betritt von Schritt 2 (idempotent)
 }
 
 backBtn.addEventListener("click", () => goTo(current - 1));

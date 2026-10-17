@@ -30,6 +30,7 @@ import {
   saveRatings,
   loadRatings,
 } from "../src/core/ratings.js";
+import { fallbackPoster, posterHue } from "../src/ui/step2.js";
 
 let passed = 0;
 let failed = 0;
@@ -426,6 +427,37 @@ test("Bewertungen: kaputtes JSON → leeres Objekt, wirft nie", () => {
 test("Bewertungen: Storage explizit null (Offline-Modus) → kein Crash, kein Write", () => {
   assert.deepEqual(loadRatings(null), emptyRatings());
   assert.equal(saveRatings(null, setStars(emptyRatings(), "f", 3)), false);
+});
+
+console.log("\nPunkt 5b – Schritt-2-UI (reine Helfer)\n");
+
+test("step2: fallbackPoster liefert SVG-Data-URI mit Titel-Initialen und Jahr", () => {
+  const uri = fallbackPoster({ id: "inception-2010", title: "Inception", year: 2010 });
+  assert.match(uri, /^data:image\/svg\+xml;charset=utf-8,/, "keine SVG-Data-URI");
+  const svg = decodeURIComponent(uri.slice(uri.indexOf(",") + 1));
+  assert.match(svg, /<svg/, "kein SVG-Markup");
+  assert.match(svg, />I<\/text>/, "Initialen fehlen im SVG"); // "Inception" → "I"
+  assert.match(svg, /2010/, "Jahr fehlt im SVG");
+});
+
+test("step2: fallbackPoster ist deterministisch (gleiche ID → gleiche URI)", () => {
+  const film = { id: "the-dark-knight-2008", title: "Der dunkle Ritter", year: 2008 };
+  assert.equal(fallbackPoster(film), fallbackPoster({ ...film }));
+});
+
+test("step2: Poster-Farbvariation unterscheidet sich je Film (Hue 0..359, Hash)", () => {
+  const a = posterHue("inception-2010");
+  const b = posterHue("titanic-1997");
+  assert.ok(Number.isInteger(a) && a >= 0 && a < 360, `hue a ungültig: ${a}`);
+  assert.ok(Number.isInteger(b) && b >= 0 && b < 360, `hue b ungültig: ${b}`);
+  assert.notEqual(a, b, "zwei Filme landen auf derselben Farbe");
+});
+
+test("step2: fallbackPoster ignoriert Artikel in Initialen und verträgt kaputte Daten", () => {
+  const dark = fallbackPoster({ id: "x-1", title: "Der dunkle Ritter", year: 2008 });
+  assert.match(decodeURIComponent(dark.slice(dark.indexOf(",") + 1)), /DR</, "Initialen sollen 'DR' sein");
+  const empty = fallbackPoster({ id: "y-2", title: "", year: 1999 });
+  assert.match(decodeURIComponent(empty.slice(empty.indexOf(",") + 1)), /\?\?</, "leerer Titel → '??'");
 });
 
 await Promise.allSettled(pending); // asynchrone Tests (Punkt 3) bis zum Abschluss laufen lassen

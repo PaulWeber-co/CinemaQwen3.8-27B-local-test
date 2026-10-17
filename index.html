@@ -64,6 +64,50 @@
     .step-panel { display: none; }
     .step-panel.active { display: block; animation: fadeUp 0.3s ease; }
     @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    /* Film-Karten (Plan-Punkt 5b; Styles hier, damit sie ohne Tailwind-JIT funktionieren) */
+    .film-card {
+      border-radius: 0.75rem; overflow: hidden; cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.04);
+      transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .film-card:hover {
+      transform: translateY(-3px); border-color: rgba(139,92,246,0.5);
+      box-shadow: 0 10px 26px rgba(0,0,0,0.45);
+    }
+    .film-card-poster { display: block; width: 100%; aspect-ratio: 2 / 3; padding: 0; border: 0; background: rgba(255,255,255,0.05); }
+    .film-card-poster-img { display: block; width: 100%; height: 100%; object-fit: cover; transition: opacity 0.3s ease; }
+    .film-card-poster:hover .film-card-poster-img { opacity: 0.85; }
+    .film-card-body { padding: 0.65rem 0.75rem 0.8rem; }
+    .film-card-title { font-size: 0.8rem; font-weight: 500; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .film-card-year { margin-top: 0.1rem; font-size: 0.7rem; color: #64748b; }
+    .star-widget { margin-top: 0.5rem; display: flex; gap: 0.15rem; }
+    .star-btn {
+      width: 1.5rem; height: 1.5rem; padding: 0; border: 0; background: transparent;
+      color: #3d4658; font-size: 1.05rem; line-height: 1; cursor: pointer;
+      transition: color 0.15s ease, transform 0.15s ease;
+    }
+    .star-btn:hover { color: #f0b429; transform: scale(1.2); }
+    .star-btn--on { color: #f0b429; }
+    .film-card-actions { margin-top: 0.55rem; display: flex; align-items: center; gap: 0.5rem; }
+    .film-icon-btn {
+      width: 1.7rem; height: 1.7rem; padding: 0; border-radius: 9999px; cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04);
+      font-size: 0.8rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+      transition: all 0.2s ease;
+    }
+    .film-icon-btn:hover { border-color: rgba(139,92,246,0.5); }
+    .film-icon-btn--on { color: #f0b429; border-color: #f0b429; background: rgba(240,180,41,0.12); box-shadow: 0 0 12px rgba(240,180,41,0.2); }
+    /* Klappentext-Modal (Plan-Punkt 5b) */
+    #film-modal { position: fixed; inset: 0; z-index: 50; align-items: center; justify-content: center; padding: 1rem; }
+    #film-modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }
+    .film-modal-panel { position: relative; width: 100%; max-width: 26rem; }
+    #film-modal-poster { width: 6rem; height: 9rem; object-fit: cover; border-radius: 0.5rem; flex-shrink: 0; }
+    #film-modal-close {
+      position: absolute; top: 0.5rem; right: 0.5rem; width: 1.8rem; height: 1.8rem;
+      border: 0; border-radius: 9999px; background: rgba(255,255,255,0.08);
+      color: #94a3b8; font-size: 1rem; line-height: 1; cursor: pointer; transition: all 0.2s ease;
+    }
+    #film-modal-close:hover { color: #fff; background: rgba(139,92,246,0.35); }
   </style>
 </head>
 <body class="min-h-screen bg-anthracite-950 font-sans text-slate-200 antialiased">
@@ -117,7 +161,33 @@
 
       <section id="step-2" class="step-panel glass rounded-2xl p-8" data-step="2" aria-label="Schritt 2: Filme">
         <h2 class="text-xl font-semibold text-slate-100">Deine Filme</h2>
-        <p class="mt-3 text-sm text-slate-400">Bestecke deine Lieblingsfilme – folgt mit Plan-Punkt 5.</p>
+        <p class="mt-3 text-sm text-slate-400">
+          Bewerte Filme, die du gesehen hast (1–5&nbsp;Sterne), merke dir Favoriten für später (🔖) und
+          klicke auf eine Karte für den Klappentext. Alles wird automatisch gespeichert.
+        </p>
+
+        <div class="mt-6 flex items-center justify-between">
+          <span id="ratings-progress" class="text-sm text-slate-300">Gesehen: 0 von 35</span>
+          <span class="text-xs text-slate-500">Tipp: Erneuter Klick auf die aktuelle Bewertung löscht sie</span>
+        </div>
+
+        <div id="film-grid" class="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3"></div>
+
+        <!-- Klappentext-Modal -->
+        <div id="film-modal" class="flex hidden" role="dialog" aria-modal="true" aria-labelledby="film-modal-title">
+          <div id="film-modal-backdrop" class="absolute inset-0" aria-hidden="true"></div>
+          <div class="film-modal-panel glass rounded-2xl p-6">
+            <button id="film-modal-close" type="button" aria-label="Schließen">&times;</button>
+            <div class="flex gap-4">
+              <img id="film-modal-poster" class="rounded-lg" alt="" />
+              <div class="min-w-0">
+                <h3 id="film-modal-title" class="text-lg font-semibold text-slate-100"></h3>
+                <p id="film-modal-meta" class="mt-1 text-sm text-slate-400"></p>
+              </div>
+            </div>
+            <p id="film-modal-description" class="mt-4 max-h-64 overflow-y-auto text-sm leading-relaxed text-slate-300"></p>
+          </div>
+        </div>
       </section>
 
       <section id="step-3" class="step-panel glass rounded-2xl p-8" data-step="3" aria-label="Schritt 3: Match">
