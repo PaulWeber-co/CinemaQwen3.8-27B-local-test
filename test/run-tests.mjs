@@ -4,7 +4,18 @@
 // Jeder nachfolgende Plan-Punkt hängt hier seine Unit-Tests an.
 
 import assert from "node:assert/strict";
-import { encodeCode, decodeCode } from "../src/core/codec.js";
+import {
+  CODE_VERSION,
+  emptyUserData,
+  normalizeUserData,
+  buildUserData,
+  encodeCode,
+  decodeCode,
+  bytesToBase64,
+  base64ToBytes,
+  demoFriendData,
+  demoFriendCode,
+} from "../src/core/codec.js";
 import { computeMatch } from "../src/core/matcher.js";
 import { catalog, catalogGenres, findFilmById, KNOWN_GENRES } from "../src/core/catalog.js";
 import { createItunesClient, ituns, mapGenre } from "../src/core/itunes.js";
@@ -708,6 +719,124 @@ test("normalizeCustomFilms: defensiva – kaputte Einträge/Doppel-IDs raus, MAX
   assert.equal(normalizeCustomFilms(many).length, MAX_CUSTOM_FILMS);
   assert.deepEqual(normalizeCustomFilms("kaputt"), []);
   assert.deepEqual(normalizeCustomFilms(null), []);
+});
+
+// --- Punkt 7a – Codec (Kern: encode/decode, Base64, Normalisierung) ----------
+
+console.log("\nPunkt 7a – Share-Code-Codec (Kern)\n");
+
+test("Base64: Bytes ↔ String Roundtrip (inkl. UTF-8-Nachname, umlautsicher)", () => {
+  const bytes = new TextEncoder().encode('{"name":"Léna Müller","genres":["Sci-Fi"]}');
+  const b64 = bytesToBase64(bytes);
+  assert.ok(typeof b64 === "string" && b64.length > 0, "leerer Base64-String");
+  const back = base64ToBytes(b64);
+  assert.deepEqual(back, bytes, "Byte-Roundtrip weicht ab");
+  assert.equal(new TextDecoder().decode(back), '{"name":"Léna Müller","genres":["Sci-Fi"]}');
+});
+
+test("base64ToBytes: tolerant gegenüber whitespace, strikt bei Müll", () => {
+  const bytes = new TextEncoder().encode("Hallo");
+  const b64 = bytesToBase64(bytes);
+  const withSpace = `${b64.slice(0, 2)}\n${b64.slice(2)}`;
+  assert.deepEqual(base64ToBytes(withSpace), bytes, "whitespace sollte ignoriert werden");
+  assert.equal(base64ToBytes("nicht§base64!!"), null, "ungültige Zeichen → null");
+  assert.equal(base64ToBytes("abc"), null, "Länge %4 ≠ 0 → null");
+  assert.equal(base64ToBytes(""), null, "leer → null");
+  assert.equal(base64ToBytes(123), null, "kein String → null");
+});
+
+test("encodeCode → decodeCode Roundtrip: Umlaut-Name, Genres, Sterne, Watchlist, Custom", () => {
+  const data = {
+    v: 1,
+    name: "Léna Müller",
+    genres: ["Sci-Fi", "Drama", "Kein-Genre"], // "Kein-Genre" ist unbekannt → raus
+    films: { "inception-2010": 5, "dune-2021": 3, "kaputt": 9, "leer": 0 },
+    watchlist: ["gravity-2013", "gravity-2013", ""],
+    custom: [{ id: "it:9", title: "Inventar", year: 2020 }],
+  };
+  const code = encodeCode(data);
+  assert.ok(/^[A-Za-z0-9+/=]+$/.test(code), "Code enthält Nicht-Base64-Zeichen");
+  const back = decodeCode(code);
+  assert.equal(back.v, CODE_VERSION);
+  assert.equal(back.name, "Léna Müller", "Umlaut-Name ging verloren");
+  assert.deepEqual(back.genres, ["Sci-Fi", "Drama"], "unbekanntes Genre blieb drin");
+  assert.deepEqual(back.films, { "inception-2010": 5, "dune-2021": 3 }, "Sterne 9/0 sollten fallen");
+  assert.deepEqual(back.watchlist, ["gravity-2013"], "Duplikat/leere ID blieb in Watchlist");
+  assert.equal(back.custom.length, 1);
+  assert.equal(back.custom[0].id, "it:9");
+});
+
+test("decodeCode: Müllexemplare werfen deutsche Fehlermeldung, kein roher Wurf", () => {
+  for (const bad of ["ganz-sicher-kein-code", "@@@@", "", "   "]) {
+    assert.throws(() => decodeCode(bad), /CineMatch|beschädigt|Version/i, `keine saubere Meldung für ${JSON.stringify(bad)}`);
+  }
+  assert.throws(() => decodeCode(42), /CineMatch|beschädigt|Version/i);
+});
+
+test("decodeCode: fremde Code-Version wird sauber abgelehnt", () => {
+  const code = encodeCode({ v: 1, name: "X", genres: [], films: {}, watchlist: [], custom: [] });
+  const raw = JSON.parse(new TextDecoder().decode(base64ToBytes(code)));
+  raw.v = 2;
+  const v2 = bytesToBase64(new TextEncoder().encode(JSON.stringify(raw)));
+  assert.throws(() => decodeCode(v2), /Version/i);
+});
+
+test("decodeCode: fehlt v → als v1 geduldet (ältere Codes bleiben lesbar)", () => {
+  const code = bytesToBase64(
+    new TextEncoder().encode(JSON.stringify({ name: "Alt", genres: ["Drama"], films: { "titanic-1997": 4 }, watchlist: [], custom: [] }))
+  );
+  const back = decodeCode(code);
+  assert.equal(back.v, CODE_VERSION);
+  assert.equal(back.name, "Alt");
+  assert.equal(back.films["titanic-1997"], 4);
+});
+
+test("normalizeUserData: defensiva – klammert Sterne, filtert Genres, dedupliziert Watchlist", () => {
+  const n = normalizeUserData({
+    name: "   Paul   ",
+    genres: ["Drama", "Drama", 7, "Action"],
+    films: { a: 7, b: -1, c: 2.6, d: 3, "": 5 },
+    watchlist: ["a", "a", "  b  ", 3, null],
+    custom: "kaputt",
+  });
+  assert.equal(n.name, "Paul");
+  assert.deepEqual(n.genres, ["Drama", "Action"]);
+  assert.deepEqual(n.films, { c: 3, d: 3 }, `2.6→3, 7/-1/leere-ID weg: ${JSON.stringify(n.films)}`);
+  assert.deepEqual(n.watchlist, ["a", "b"]);
+  assert.deepEqual(n.custom, []);
+});
+
+test("buildUserData: Profil + Bewertungen + Custom → kompakte Code-Daten", () => {
+  const built = buildUserData({
+    profile: { name: "  Paul  ", genres: ["Sci-Fi", "Thriller"] },
+    ratings: {
+      films: {
+        "inception-2010": { stars: 5, watchlist: false },
+        "interstellar-2014": { stars: 0, watchlist: true }, // nur Watchlist, kein Stern
+        "gravity-2013": { stars: 2, watchlist: true },
+      },
+    },
+    customFilms: [{ id: "it:9", title: "Inventar", year: 2020 }],
+  });
+  assert.equal(built.name, "Paul");
+  assert.deepEqual(built.genres, ["Sci-Fi", "Thriller"]);
+  assert.deepEqual(built.films, { "inception-2010": 5, "gravity-2013": 2 }, "0-Sterne-Film gehört nicht in den Code");
+  assert.deepEqual(built.watchlist, ["interstellar-2014", "gravity-2013"], "Watchlist-Eintrag ohne Stern bleibt in der Watchlist");
+  assert.equal(built.custom.length, 1);
+});
+
+test("Demo-Freund: deterministischer, dekodierbarer Test-Code mit Katalog-Referenzen", () => {
+  const code = demoFriendCode();
+  assert.equal(code, demoFriendCode(), "Code wäre nicht deterministisch");
+  const friend = decodeCode(code);
+  assert.equal(friend.name, "Lena");
+  assert.ok(friend.genres.length > 0, "Demo-Freund ohne Genres");
+  assert.ok(Object.keys(friend.films).length >= 5, "Demo-Freund zu dünn besetzt");
+  // Alle Film-IDs referenzieren den Katalog → Empfänger braucht kein iTunes-Nachladen
+  for (const id of Object.keys(friend.films)) {
+    assert.ok(findFilmById(id), `Demo-Film ${id} nicht im Katalog`);
+  }
+  assert.deepEqual(emptyUserData(), { v: CODE_VERSION, name: "", genres: [], films: {}, watchlist: [], custom: [] });
 });
 
 // --- Punkt 6b – Livesuche in Schritt 2 (DOM-Stub) ----------------------------
