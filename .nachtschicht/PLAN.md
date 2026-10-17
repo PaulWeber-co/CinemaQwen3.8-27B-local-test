@@ -5,6 +5,8 @@ Annahmen: Keine npm-Abhängigkeiten – Tailwind via CDN, Vanilla JS als ES-Modu
 
 ## Punkte
 - [ ] 1. Grundgerüst: `index.html` mit Tailwind-CDN, Dark-Theme (Anthrazit, Neon-Violett/Gold, Glasmorphismus), App-Shell mit 3 Schritten; `src/core/`-Ordner mit leerem, testfähigem `codec.js`/`matcher.js`; `test/run-tests.mjs` (1 Smoke-Assert) – Prüfbefehl läuft grün, Seite öffnet im Browser.
+  - [x] 1a. Kern-Module + Test-Runner: `src/core/codec.js` (encodeCode/decodeCode) und `src/core/matcher.js` (computeMatch) als DOM-freie, Node-testbare Stubs; `test/run-tests.mjs` (minimaler Runner, 1 Smoke-Assert) – `node test/run-tests.mjs` läuft grün.
+  - [ ] 1b. `index.html` mit Tailwind-CDN, Dark-Theme (Anthrazit, Neon-Violett/Gold, Glasmorphismus), App-Shell mit 3 Schritten – Seite öffnet im Browser.
 - [ ] 2. Kuratierte Start-Bestenliste: `src/core/catalog.js` mit ~35 Kult-/Blockbuster-Filmen (Titel, Jahr, Genre, iTunes-`term`), unit-getestet.
 - [ ] 3. iTunes-API-Client: `src/core/itunes.js` holt Cover (hiRes) + deutsche Beschreibung, in-memory + localStorage-Cache, sauberes Fallback-Verhalten bei Fehlern/Offline; Unit-Tests mit gefaktem fetch.
 - [ ] 4. Schritt-1-UI: Namen-Eingabe + 10 Genre-Pills (max. 5, Toggle), automatischer localStorage-Save/Restore; Seite bleibt lauffähig.

@@ -1,1 +1,2 @@
 # Nachtschicht-Log
+- 1a: src/core/codec.js (encodeCode/decodeCode) und src/core/matcher.js (computeMatch) als DOM-freie Stubs angelegt (werfen "noch nicht implementiert", Umsetzung folgt mit Punkt 7 bzw. 8); test/run-tests.mjs mit minimalem Runner und 1 Smoke-Assert (API-Check). Prüfbefehl `node test/run-tests.mjs` grün (1 bestanden, 0 fehlgeschlagen), Node v26.12.0. Annahme: Punkt 1 im PLAN in 1a/1b gesplittet, 1b (index.html-Shell) offen für die nächste Schicht.
