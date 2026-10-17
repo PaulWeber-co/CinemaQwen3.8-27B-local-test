@@ -48,6 +48,18 @@
       background: rgba(255,255,255,0.08); font-weight: 600; font-size: 0.8rem;
     }
     .step-dot.active .num { background: #f0b429; color: #1a1206; }
+    /* Genre-Pills (Plan-Punkt 4; Styles hier, damit sie ohne Tailwind-JIT funktionieren) */
+    .genre-pill {
+      padding: 0.45rem 0.95rem; border-radius: 9999px; cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04);
+      color: #94a3b8; font-size: 0.85rem; transition: all 0.2s ease;
+    }
+    .genre-pill:hover { border-color: rgba(139,92,246,0.5); color: #e2e8f0; }
+    .genre-pill[aria-pressed="true"] {
+      background: rgba(139,92,246,0.2); border-color: #8b5cf6; color: #f5f3ff;
+      box-shadow: 0 0 14px rgba(139,92,246,0.25);
+    }
+    .genre-count--limit { color: #f0b429; }
     /* Schritt-Panel-Wechsel */
     .step-panel { display: none; }
     .step-panel.active { display: block; animation: fadeUp 0.3s ease; }
@@ -83,7 +95,24 @@
     <main>
       <section id="step-1" class="step-panel active glass rounded-2xl p-8" data-step="1" aria-label="Schritt 1: Profil">
         <h2 class="text-xl font-semibold text-slate-100">Dein Profil</h2>
-        <p class="mt-3 text-sm text-slate-400">Name und Lieblingsgenres – folgt mit Plan-Punkt 4.</p>
+        <p class="mt-3 text-sm text-slate-400">Wie heißt du, und welche Genres magst du? Deine Auswahl wird automatisch gespeichert.</p>
+
+        <label class="mt-6 block text-sm font-medium text-slate-300" for="profile-name">Name</label>
+        <input
+          id="profile-name"
+          type="text"
+          autocomplete="off"
+          maxlength="40"
+          placeholder="z. B. Paul"
+          class="mt-2 w-full rounded-lg border border-white/10 bg-anthracite-800 px-3 py-2 text-slate-100 placeholder-slate-500 outline-none transition focus:border-neon-violet focus:ring-2 focus:ring-neon-violet/30"
+        />
+
+        <div class="mt-6 flex items-center justify-between">
+          <span class="text-sm font-medium text-slate-300">Lieblingsgenres</span>
+          <span id="genre-count" class="text-xs text-slate-500">0 / 5</span>
+        </div>
+        <p id="genre-limit-hint" class="mt-1 text-xs text-neon-gold" hidden>Maximal 5 Genres auswählbar – wähle zuerst eines ab.</p>
+        <div id="genre-pills" class="mt-3 flex flex-wrap gap-2"></div>
       </section>
 
       <section id="step-2" class="step-panel glass rounded-2xl p-8" data-step="2" aria-label="Schritt 2: Filme">

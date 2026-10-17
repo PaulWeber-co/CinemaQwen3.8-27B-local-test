@@ -1,6 +1,8 @@
 // CineMatch – App-Shell (Punkt 1b)
 // Navigiert durch die drei Schritte des 3-Schritte-Flows.
-// Die Schrittplatten selbst füllen spätere Punkte (4–9) mit Inhalt.
+// Die Schrittplatten füllen die jeweiligen Plan-Punkte mit Inhalt.
+
+import { initStep1 } from "./ui/step1.js";
 
 const TOTAL_STEPS = 3;
 
@@ -34,5 +36,7 @@ nextBtn.addEventListener("click", () => goTo(current + 1));
 dots.forEach((dot) => {
   dot.addEventListener("click", () => goTo(Number(dot.dataset.goto)));
 });
+
+initStep1(); // Schritt-1-UI: Name + Genre-Pills mit Auto-Save (Plan-Punkt 4)
 
 render();

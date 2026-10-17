@@ -9,7 +9,7 @@ Annahmen: Keine npm-Abhängigkeiten – Tailwind via CDN, Vanilla JS als ES-Modu
   - [x] 1b. `index.html` mit Tailwind-CDN, Dark-Theme (Anthrazit, Neon-Violett/Gold, Glasmorphismus), App-Shell mit 3 Schritten – Seite öffnet im Browser.
 - [x] 2. Kuratierte Start-Bestenliste: `src/core/catalog.js` mit ~35 Kult-/Blockbuster-Filmen (Titel, Jahr, Genre, iTunes-`term`), unit-getestet.
 - [x] 3. iTunes-API-Client: `src/core/itunes.js` holt Cover (hiRes) + deutsche Beschreibung, in-memory + localStorage-Cache, sauberes Fallback-Verhalten bei Fehlern/Offline; Unit-Tests mit gefaktem fetch.
-- [ ] 4. Schritt-1-UI: Namen-Eingabe + 10 Genre-Pills (max. 5, Toggle), automatischer localStorage-Save/Restore; Seite bleibt lauffähig.
+- [x] 4. Schritt-1-UI: Namen-Eingabe + 10 Genre-Pills (max. 5, Toggle), automatischer localStorage-Save/Restore; Seite bleibt lauffähig.
 - [ ] 5. Schritt-2-UI: Film-Grid mit Poster, Titel, Jahr; 1–5 Sterne (setzt "gesehen"), Watchlist-Button, Reset auf "unberührt", Klappentext-Modal; alles in localStorage persistiert.
 - [ ] 6. Live-Suchleiste: iTunes-Livesuche (Debounce, Ergebnis-Dropdown), Treffer per Klick in die Bewertungsliste aufnehmen.
 - [ ] 7. Schritt 3: "Meinen Code kopieren" (kompaktes JSON → Base64 → Zwischenablage) + Einfügefeld + "Match berechnen!" (Validierung, Fehlermeldung); "Demo-Freund laden"-Button mit vorgefertigtem Test-Code.

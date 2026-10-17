@@ -8,6 +8,16 @@ import { encodeCode, decodeCode } from "../src/core/codec.js";
 import { computeMatch } from "../src/core/matcher.js";
 import { catalog, catalogGenres, findFilmById, KNOWN_GENRES } from "../src/core/catalog.js";
 import { createItunesClient, ituns } from "../src/core/itunes.js";
+import {
+  PROFILE_STORAGE_KEY,
+  MAX_GENRES,
+  emptyProfile,
+  normalizeName,
+  normalizeProfile,
+  toggleGenre,
+  saveProfile,
+  loadProfile,
+} from "../src/core/profile.js";
 
 let passed = 0;
 let failed = 0;
@@ -242,6 +252,74 @@ test("clearCache: leert localStorage und erzwingt neuen API-Call", async () => {
   assert.equal(storage.length, 0, "clearCache hat eigene storage-Keys nicht entfernt");
   await client.lookup("Inception 2010");
   assert.equal(calls(), 2, "erwartet API-Call nach clearCache");
+});
+
+console.log("\nPunkt 4 – Profil (Schritt 1)\n");
+
+test("Profil-API: MAX_GENRES=5, leeres Profil als Fallback", () => {
+  assert.equal(MAX_GENRES, 5);
+  assert.deepEqual(emptyProfile(), { name: "", genres: [] });
+});
+
+test("normalizeName: trimmt und kürzt bei 40 Zeichen, Nicht-String → leer", () => {
+  assert.equal(normalizeName("  Paul  "), "Paul");
+  assert.equal(normalizeName("x".repeat(99)).length, 40);
+  assert.equal(normalizeName(42), "");
+  assert.equal(normalizeName(null), "");
+});
+
+test("normalizeProfile: bekannte Genres ohne Duplikate, max. 5, in Reihung", () => {
+  const p = normalizeProfile({
+    name: "  Anna  ",
+    genres: ["Action", "Action", "Sci-Fi", "unbekannt", "Drama", "Horror", "Thriller", "Krimi"],
+  });
+  assert.equal(p.name, "Anna");
+  assert.deepEqual(p.genres, ["Action", "Sci-Fi", "Drama", "Horror", "Thriller"]);
+});
+
+test("normalizeProfile: kaputte/leere Eingaben → leeres Profil, wirft nie", () => {
+  assert.deepEqual(normalizeProfile(null), emptyProfile());
+  assert.deepEqual(normalizeProfile("string"), emptyProfile());
+  assert.deepEqual(normalizeProfile({ name: 42, genres: "Action" }), emptyProfile());
+});
+
+test("toggleGenre: an-/abschalten, unbekanntes Genre bleibt ignoriert", () => {
+  let p = toggleGenre(emptyProfile(), "Action").profile;
+  assert.deepEqual(p.genres, ["Action"]);
+  p = toggleGenre(p, "Action").profile; // wieder ab
+  assert.deepEqual(p.genres, []);
+  const unknown = toggleGenre(emptyProfile(), "Musical");
+  assert.equal(unknown.atLimit, false);
+  assert.deepEqual(unknown.profile.genres, []);
+});
+
+test("toggleGenre: max. 5 Genres – sechstes wird blockiert (atLimit), Abschalten bleibt möglich", () => {
+  const full = { name: "", genres: ["Action", "Drama", "Sci-Fi", "Horror", "Thriller"] };
+  const blocked = toggleGenre(full, "Krimi");
+  assert.equal(blocked.atLimit, true);
+  assert.equal(blocked.profile.genres.length, 5);
+  const removed = toggleGenre(full, "Drama");
+  assert.equal(removed.atLimit, false);
+  assert.equal(removed.profile.genres.length, 4);
+});
+
+test("Profil: Save/Load-Roundtrip über (Fake-)-Storage", () => {
+  const s = new FakeStorage();
+  const p = { name: "Paul", genres: ["Action", "Komödie"] };
+  assert.equal(saveProfile(s, p), true);
+  assert.equal(s.getItem(PROFILE_STORAGE_KEY), JSON.stringify(p));
+  assert.deepEqual(loadProfile(s), p);
+});
+
+test("Profil: kaputtes JSON → leeres Profil, wirft nie", () => {
+  const s = new FakeStorage();
+  s.setItem(PROFILE_STORAGE_KEY, "{ kaputt");
+  assert.deepEqual(loadProfile(s), emptyProfile());
+});
+
+test("Profil: Storage explizit null (Offline-Modus) → kein Crash, kein Write", () => {
+  assert.deepEqual(loadProfile(null), emptyProfile());
+  assert.equal(saveProfile(null, { name: "x" }), false);
 });
 
 await Promise.allSettled(pending); // asynchrone Tests (Punkt 3) bis zum Abschluss laufen lassen
