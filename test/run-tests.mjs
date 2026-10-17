@@ -7,19 +7,34 @@ import assert from "node:assert/strict";
 import { encodeCode, decodeCode } from "../src/core/codec.js";
 import { computeMatch } from "../src/core/matcher.js";
 import { catalog, catalogGenres, findFilmById, KNOWN_GENRES } from "../src/core/catalog.js";
+import { createItunesClient, ituns } from "../src/core/itunes.js";
 
 let passed = 0;
 let failed = 0;
 
+const pending = []; // ausstehende asynchrone Tests (Plan-Punkt 3)
+
 function test(name, fn) {
+  const report = (err) => {
+    if (err) {
+      failed++;
+      console.error(`  FAIL ${name}`);
+      console.error(`       ${err.message}`);
+    } else {
+      passed++;
+      console.log(`  ok   ${name}`);
+    }
+  };
   try {
-    fn();
-    passed++;
-    console.log(`  ok   ${name}`);
+    const result = fn();
+    if (result && typeof result.then === "function") {
+      pending.push(result);
+      result.then(() => report(null), report);
+    } else {
+      report(null);
+    }
   } catch (err) {
-    failed++;
-    console.error(`  FAIL ${name}`);
-    console.error(`       ${err.message}`);
+    report(err);
   }
 }
 
@@ -60,6 +75,176 @@ test("findFilmById liefert den passenden Film / undefined bei Unbekanntem", () =
   assert.equal(findFilmById("inception-2010").title, "Inception");
   assert.equal(findFilmById("keine-id-diese-gibt-es-nicht"), undefined);
 });
+
+console.log("\nPunkt 3 – iTunes-Client\n");
+
+// --- Test-Doubles ---------------------------------------------------------
+
+/** localStorage-Nachbau (in-memory). */
+class FakeStorage {
+  constructor() { this.map = new Map(); }
+  get length() { return this.map.size; }
+  key(i) { return [...this.map.keys()][i] ?? null; }
+  getItem(k) { return this.map.has(k) ? this.map.get(k) : null; }
+  setItem(k, v) { this.map.set(k, String(v)); }
+  removeItem(k) { this.map.delete(k); }
+  clear() { this.map.clear(); }
+}
+
+function okResponse(body) {
+  return { ok: true, status: 200, json: async () => body };
+}
+
+const ITUNES_HIT = {
+  resultCount: 1,
+  results: [
+    {
+      trackName: "Inception",
+      artworkUrl100: "https://is1-ssl.mzstatic.com/image/thumb/xyz/100x100bb.jpg",
+      longDescription: "Dom Cobb dringt in Träume ein, um eine Idee in den Kopf eines Ziels zu pflanzen.",
+    },
+  ],
+};
+
+// --- Tests -----------------------------------------------------------------
+
+function makeFakeFetch(impl) {
+  let calls = 0;
+  return {
+    fetchImpl: (url, init) => { calls++; return impl(url, init); },
+    calls: () => calls,
+  };
+}
+
+test("API: createItunesClient liefert lookup/clearCache, Singleton `ituns` existiert", () => {
+  const client = createItunesClient();
+  assert.equal(typeof client.lookup, "function", "lookup fehlt");
+  assert.equal(typeof client.clearCache, "function", "clearCache fehlt");
+  assert.equal(typeof ituns.lookup, "function", "Singleton ituns fehlgerichtet");
+});
+
+test("Erfolg: hiRes-Cover (1000x1000bb), Titel + Beschreibung, source=itunes", async () => {
+  const { fetchImpl, calls } = makeFakeFetch(() => Promise.resolve(okResponse(ITUNES_HIT)));
+  const client = createItunesClient({ fetch: fetchImpl });
+  const r = await client.lookup("Inception 2010");
+  assert.equal(r.source, "itunes");
+  assert.equal(r.title, "Inception");
+  assert.match(r.poster, /1000x1000bb\.jpg$/, `Poster nicht hiRes: ${r.poster}`);
+  assert.match(r.description, /Träume/);
+  assert.equal(calls(), 1);
+});
+
+test("API-URL: enthält media=movie, country=DE und URI-kodierten Suchbegriff", async () => {
+  let url;
+  const client = createItunesClient({
+    fetch: (u) => { url = u; return Promise.resolve(okResponse(ITUNES_HIT)); },
+  });
+  await client.lookup("The Matrix 1999");
+  assert.match(url, /media=movie/);
+  assert.match(url, /country=DE/);
+  assert.match(url, /term=the%20matrix%201999/); // normalisiert (lowercase) + URI-kodiert
+});
+
+test("In-Memory-Cache: zweiter Lookup ohne API-Call, fromCache=true", async () => {
+  const { fetchImpl, calls } = makeFakeFetch(() => Promise.resolve(okResponse(ITUNES_HIT)));
+  const client = createItunesClient({ fetch: fetchImpl });
+  await client.lookup("inception 2010");
+  const r2 = await client.lookup("Inception 2010"); // normalisiert → gleicher Key
+  assert.equal(calls(), 1, "erwartet 1 API-Call, gab es 2");
+  assert.equal(r2.fromCache, true);
+  assert.equal(r2.source, "itunes");
+});
+
+test("localStorage-Cache: zweite Client-Instanz (neue Sitzung) ohne API-Call", async () => {
+  const storage = new FakeStorage();
+  const first = createItunesClient({
+    fetch: () => Promise.resolve(okResponse(ITUNES_HIT)), storage,
+  });
+  await first.lookup("Inception 2010");
+  assert.ok(storage.length >= 1, "Erfolg wurde nicht in localStorage gespeichert");
+
+  const { fetchImpl, calls } = makeFakeFetch(() => Promise.resolve(okResponse(ITUNES_HIT)));
+  const second = createItunesClient({ fetch: fetchImpl, storage });
+  const r = await second.lookup("Inception 2010");
+  assert.equal(calls(), 0, "erwartet Cache-Treffer aus storage, aber API-Call");
+  assert.equal(r.fromCache, true);
+  assert.equal(r.source, "itunes");
+});
+
+test("Netzwerkfehler (fetch rejectet) → Fallback, wirft nie", async () => {
+  const { fetchImpl } = makeFakeFetch(() => Promise.reject(new TypeError("Failed to fetch")));
+  const client = createItunesClient({ fetch: fetchImpl });
+  const r = await client.lookup("Inception 2010");
+  assert.equal(r.source, "fallback");
+  assert.equal(r.poster, null);
+  assert.equal(r.description, null);
+  assert.ok(r.reason, "Fallback-Grund fehlt");
+});
+
+test("HTTP 404 → Fallback", async () => {
+  const client = createItunesClient({
+    fetch: () => Promise.resolve({ ok: false, status: 404, json: async () => ({}) }),
+  });
+  const r = await client.lookup("Kein Film XYZ");
+  assert.equal(r.source, "fallback");
+  assert.match(r.reason, /404/);
+});
+
+test("Kein Treffer (resultCount=0) → Fallback", async () => {
+  const client = createItunesClient({
+    fetch: () => Promise.resolve(okResponse({ resultCount: 0, results: [] })),
+  });
+  const r = await client.lookup("Unbekanntes Meisterwerk 1999");
+  assert.equal(r.source, "fallback");
+  assert.match(r.reason, /kein Treffer/i);
+});
+
+test("Kaputtes JSON → Fallback (wirft nie)", async () => {
+  const client = createItunesClient({
+    fetch: () => Promise.resolve({ ok: true, status: 200, json: async () => { throw new Error("bad json"); } }),
+  });
+  const r = await client.lookup("Inception 2010");
+  assert.equal(r.source, "fallback");
+});
+
+test("Fallback wird NICHT in localStorage geparkt (Retry nach Re-Online möglich)", async () => {
+  const storage = new FakeStorage();
+  const offline = createItunesClient({
+    fetch: () => Promise.reject(new TypeError("offline")), storage,
+  });
+  await offline.lookup("Inception 2010");
+  assert.equal(storage.length, 0, "Fallback darf nicht persistent gecacht werden");
+
+  // Neuer Client mit funktionierender Verbindung → API wird erneut angefragt.
+  const { fetchImpl, calls } = makeFakeFetch(() => Promise.resolve(okResponse(ITUNES_HIT)));
+  const online = createItunesClient({ fetch: fetchImpl, storage });
+  const r = await online.lookup("Inception 2010");
+  assert.equal(calls(), 1, "erwartet Retry nach Fallback");
+  assert.equal(r.source, "itunes");
+  assert.ok(storage.length >= 1, "erfolgreiches Ergebnis wurde nicht geparkt");
+});
+
+test("Kein fetch (Offline-Modus) → sofortiger Fallback ohne Crash", async () => {
+  const client = createItunesClient({ fetch: null });
+  const r = await client.lookup("Inception 2010");
+  assert.equal(r.source, "fallback");
+  assert.match(r.reason, /offline/i);
+});
+
+test("clearCache: leert localStorage und erzwingt neuen API-Call", async () => {
+  const storage = new FakeStorage();
+  const { fetchImpl, calls } = makeFakeFetch(() => Promise.resolve(okResponse(ITUNES_HIT)));
+  const client = createItunesClient({ fetch: fetchImpl, storage });
+  await client.lookup("Inception 2010");
+  assert.ok(storage.length >= 1);
+
+  client.clearCache();
+  assert.equal(storage.length, 0, "clearCache hat eigene storage-Keys nicht entfernt");
+  await client.lookup("Inception 2010");
+  assert.equal(calls(), 2, "erwartet API-Call nach clearCache");
+});
+
+await Promise.allSettled(pending); // asynchrone Tests (Punkt 3) bis zum Abschluss laufen lassen
 
 console.log(`\n${passed} bestanden, ${failed} fehlgeschlagen`);
 process.exit(failed > 0 ? 1 : 0);
